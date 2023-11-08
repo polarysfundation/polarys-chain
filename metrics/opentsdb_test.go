@@ -48,11 +48,11 @@ func TestExampleOpenTSB(t *testing.T) {
 	}
 	if have, want := w.String(), string(wantB); have != want {
 		t.Errorf("\nhave:\n%v\nwant:\n%v\n", have, want)
-		t.Logf("have vs want:\n%v", findFirstDiffPos(have, want))
+		t.Logf("have vs want:\n%v", findFirstDiffpos(have, want))
 	}
 }
 
-func findFirstDiffPos(a, b string) string {
+func findFirstDiffpos(a, b string) string {
 	yy := strings.Split(b, "\n")
 	for i, x := range strings.Split(a, "\n") {
 		if i >= len(yy) {

@@ -119,6 +119,9 @@ var (
 	configPrefix   = []byte("ethereum-config-")  // config prefix for the db
 	genesisPrefix  = []byte("ethereum-genesis-") // genesis state prefix for the db
 
+	LastSafePointBlockKey = []byte("LastSafePointBlockNumber")
+
+
 	// BloomBitsIndexPrefix is the data table of a chain indexer to track its progress
 	BloomBitsIndexPrefix = []byte("iB")
 
@@ -130,7 +133,8 @@ var (
 	BloomTrieTablePrefix = []byte("blt-")
 	BloomTrieIndexPrefix = []byte("bltIndex-")
 
-	CliqueSnapshotPrefix = []byte("clique-")
+	CliqueSnapshotPrefix   = []byte("clique-")
+	ZephyriaSnapshotPrefix = []byte("zephyria-")
 
 	preimageCounter    = metrics.NewRegisteredCounter("db/preimage/total", nil)
 	preimageHitCounter = metrics.NewRegisteredCounter("db/preimage/hits", nil)

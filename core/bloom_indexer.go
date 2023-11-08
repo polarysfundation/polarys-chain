@@ -72,6 +72,8 @@ func (b *BloomIndexer) Process(ctx context.Context, header *types.Header) error 
 	return nil
 }
 
+
+
 // Commit implements core.ChainIndexerBackend, finalizing the bloom section and
 // writing it out into the database.
 func (b *BloomIndexer) Commit() error {

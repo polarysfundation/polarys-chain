@@ -567,24 +567,25 @@ func (c *Clique) Prepare(chain consensus.ChainHeaderReader, header *types.Header
 
 // Finalize implements consensus.Engine. There is no post-transaction
 // consensus rules in clique, do nothing here.
-func (c *Clique) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, withdrawals []*types.Withdrawal) {
+func (c *Clique) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs *[]*types.Transaction, uncles []*types.Header, withdrawals []*types.Withdrawal, _ *[]*types.Receipt, _ *[]*types.Transaction, _ *uint64)  error {
 	// No block rewards in PoA, so the state remains as is
+	return nil
 }
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
-func (c *Clique) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt, withdrawals []*types.Withdrawal) (*types.Block, error) {
+func (c *Clique) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt, withdrawals []*types.Withdrawal) (*types.Block, []*types.Receipt, error) {
 	if len(withdrawals) > 0 {
-		return nil, errors.New("clique does not support withdrawals")
+		return nil, nil, errors.New("clique does not support withdrawals")
 	}
 	// Finalize block
-	c.Finalize(chain, header, state, txs, uncles, nil)
+	c.Finalize(chain, header, state, &txs, uncles, nil, nil, nil, nil)
 
 	// Assign the final state root to header.
 	header.Root = state.IntermediateRoot(chain.Config().IsEIP158(header.Number))
 
-	// Assemble and return the final block for sealing.
-	return types.NewBlock(header, txs, nil, receipts, trie.NewStackTrie(nil)), nil
+	// Assemble and return the final block for sealing
+	return types.NewBlock(header, txs, nil, receipts, trie.NewStackTrie(nil)), receipts, nil
 }
 
 // Authorize injects a private key into the consensus engine to mint new blocks
@@ -682,6 +683,10 @@ func (c *Clique) CalcDifficulty(chain consensus.ChainHeaderReader, time uint64, 
 	return calcDifficulty(snap, signer)
 }
 
+func (c *Clique) Delay(chain consensus.ChainReader, header *types.Header, leftOver *time.Duration) *time.Duration {
+	return nil
+}
+
 func calcDifficulty(snap *Snapshot, signer common.Address) *big.Int {
 	if snap.inturn(snap.Number+1, signer) {
 		return new(big.Int).Set(diffInTurn)
@@ -690,8 +695,8 @@ func calcDifficulty(snap *Snapshot, signer common.Address) *big.Int {
 }
 
 // SealHash returns the hash of a block prior to it being sealed.
-func (c *Clique) SealHash(header *types.Header) common.Hash {
-	return SealHash(header)
+func (c *Clique) SealHash(header *types.Header) ( hash common.Hash) {
+	return c.SealHash(header)
 }
 
 // Close implements consensus.Engine. It's a noop for clique as there are no background threads.

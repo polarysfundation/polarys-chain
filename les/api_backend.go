@@ -48,6 +48,11 @@ type LesApiBackend struct {
 	gpo                 *gasprice.Oracle
 }
 
+// Chain implements ethapi.Backend.
+func (*LesApiBackend) Chain() *core.BlockChain {
+	panic("unimplemented")
+}
+
 func (b *LesApiBackend) ChainConfig() *params.ChainConfig {
 	return b.eth.chainConfig
 }

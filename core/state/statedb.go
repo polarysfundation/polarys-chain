@@ -69,6 +69,8 @@ type StateDB struct {
 	// originalRoot is the pre-state root, before any changes were made.
 	// It will be updated when the Commit is called.
 	originalRoot common.Hash
+	expectedRoot common.Hash // The state root in the block header
+
 
 	// These maps hold the state changes (including the corresponding
 	// original value) that occurred in this **block**.
@@ -95,6 +97,9 @@ type StateDB struct {
 
 	// The refund counter, also used by state transitioning.
 	refund uint64
+
+	fullProcessed bool
+
 
 	// The tx context and all occurred logs in the scope of transaction.
 	thash   common.Hash
@@ -183,6 +188,11 @@ func (s *StateDB) StartPrefetcher(namespace string) {
 	if s.snap != nil {
 		s.prefetcher = newTriePrefetcher(s.db, s.originalRoot, namespace)
 	}
+}
+
+// Mark that the block is processed by diff layer
+func (s *StateDB) SetExpectedStateRoot(root common.Hash) {
+	s.expectedRoot = root
 }
 
 // StopPrefetcher terminates a running prefetcher and reports any leftover stats
@@ -964,12 +974,10 @@ func (s *StateDB) fastDeleteStorage(addrHash common.Hash, root common.Hash) (boo
 		nodes = trienode.NewNodeSet(addrHash)
 		slots = make(map[common.Hash][]byte)
 	)
-	options := trie.NewStackTrieOptions()
-	options = options.WithWriter(func(path []byte, hash common.Hash, blob []byte) {
+	stack := trie.NewStackTrie(func(owner common.Hash, path []byte, hash common.Hash, blob []byte) {
 		nodes.AddNode(path, trienode.NewDeleted())
 		size += common.StorageSize(len(path))
 	})
-	stack := trie.NewStackTrie(options)
 	for iter.Next() {
 		if size > storageDeleteLimit {
 			return true, size, nil, nil, nil
@@ -1155,6 +1163,12 @@ func (s *StateDB) handleDestruction(nodes *trienode.MergedNodeSet) (map[common.A
 	}
 	return incomplete, nil
 }
+
+// Mark that the block is full processed
+func (s *StateDB) MarkFullProcessed() {
+	s.fullProcessed = true
+}
+
 
 // Commit writes the state to the underlying in-memory trie database.
 // Once the state is committed, tries cached in stateDB (including account

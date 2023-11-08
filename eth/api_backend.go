@@ -50,6 +50,11 @@ type EthAPIBackend struct {
 	gpo                 *gasprice.Oracle
 }
 
+// Chain implements ethapi.Backend.
+func (*EthAPIBackend) Chain() *core.BlockChain {
+	panic("unimplemented")
+}
+
 // ChainConfig returns the active chain configuration.
 func (b *EthAPIBackend) ChainConfig() *params.ChainConfig {
 	return b.eth.blockchain.Config()

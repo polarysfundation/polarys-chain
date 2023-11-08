@@ -107,6 +107,30 @@ func NewHeaderChain(chainDb ethdb.Database, config *params.ChainConfig, engine c
 	return hc, nil
 }
 
+// GetJustifiedNumber returns the highest justified blockNumber on the branch including and before `header`.
+func (hc *HeaderChain) GetJustifiedNumber(header *types.Header) uint64 {
+	if p, ok := hc.engine.(consensus.PoSA); ok {
+		justifiedBlockNumber, err := p.GetSafeBlock(hc, header)
+		if err == nil {
+			return justifiedBlockNumber
+		}
+	}
+	// return 0 when err!=nil
+	// so the input `header` will at a disadvantage during reorg
+	return 0
+}
+
+// getFinalizedNumber returns the highest finalized number before the specific block.
+func (hc *HeaderChain) getFinalizedNumber(header *types.Header) uint64 {
+	if p, ok := hc.engine.(consensus.PoSA); ok {
+		if finalizedHeader := p.ComprobeLastBlock(hc, header); finalizedHeader != nil {
+			return finalizedHeader.Number.Uint64()
+		}
+	}
+
+	return 0
+}
+
 // GetBlockNumber retrieves the block number belonging to the given hash
 // from the cache or database
 func (hc *HeaderChain) GetBlockNumber(hash common.Hash) *uint64 {
@@ -526,6 +550,10 @@ func (hc *HeaderChain) GetCanonicalHash(number uint64) common.Hash {
 // header is retrieved from the HeaderChain's internal cache.
 func (hc *HeaderChain) CurrentHeader() *types.Header {
 	return hc.currentHeader.Load().(*types.Header)
+}
+
+func (hc *HeaderChain) GetHighestVerifiedHeader() *types.Header {
+	return nil
 }
 
 // SetCurrentHeader sets the in-memory head header marker of the canonical chan

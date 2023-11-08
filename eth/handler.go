@@ -277,7 +277,7 @@ func newHandler(config *handlerConfig) (*handler, error) {
 	addTxs := func(txs []*types.Transaction) []error {
 		return h.txpool.Add(txs, false, false)
 	}
-	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx, h.removePeer)
+	h.txFetcher = fetcher.NewTxFetcher(h.txpool.Has, addTxs, fetchTx)
 	h.chainSync = newChainSyncer(h)
 	return h, nil
 }
@@ -342,7 +342,7 @@ func (h *handler) runEthPeer(peer *eth.Peer, handler eth.Handler) error {
 		number  = head.Number.Uint64()
 		td      = h.chain.GetTd(hash, number)
 	)
-	forkID := forkid.NewID(h.chain.Config(), genesis, number, head.Time)
+	forkID := forkid.NewID(h.chain.Config(), genesis.Hash(), number, head.Time)
 	if err := peer.Handshake(h.networkID, td, hash, genesis.Hash(), forkID, h.forkFilter); err != nil {
 		peer.Log().Debug("Ethereum handshake failed", "err", err)
 		return err

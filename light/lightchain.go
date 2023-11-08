@@ -49,17 +49,18 @@ var (
 // headers, downloading block bodies and receipts on demand through an ODR
 // interface. It only does header validation during chain insertion.
 type LightChain struct {
-	hc            *core.HeaderChain
-	indexerConfig *IndexerConfig
-	chainDb       ethdb.Database
-	engine        consensus.Engine
-	odr           OdrBackend
-	chainFeed     event.Feed
-	chainSideFeed event.Feed
-	chainHeadFeed event.Feed
-	scope         event.SubscriptionScope
-	genesisBlock  *types.Block
-	forker        *core.ForkChoice
+	hc                  *core.HeaderChain
+	indexerConfig       *IndexerConfig
+	chainDb             ethdb.Database
+	engine              consensus.Engine
+	odr                 OdrBackend
+	chainFeed           event.Feed
+	chainSideFeed       event.Feed
+	chainHeadFeed       event.Feed
+	finalizedHeaderFeed event.Feed
+	scope               event.SubscriptionScope
+	genesisBlock        *types.Block
+	forker              *core.ForkChoice
 
 	bodyCache    *lru.Cache[common.Hash, *types.Body]
 	bodyRLPCache *lru.Cache[common.Hash, rlp.RawValue]
@@ -72,6 +73,24 @@ type LightChain struct {
 	// Atomic boolean switches:
 	stopped       atomic.Bool // whether LightChain is stopped or running
 	procInterrupt atomic.Bool // interrupts chain insert
+}
+
+// GetHighestVerifiedHeader implements consensus.ChainHeaderReader.
+func (lc *LightChain) GetHighestVerifiedHeader() *types.Header {
+	return nil
+}
+
+// GetJustifiedNumber implements core.ChainReader.
+func (lc *LightChain) GetJustifiedNumber(header *types.Header) uint64 {
+	if p, ok := lc.engine.(consensus.PoSA); ok {
+		justifiedBlockNumber, err := p.GetSafeBlock(lc.hc, header)
+		if err == nil {
+			return justifiedBlockNumber
+		}
+	}
+	// return 0 when err!=nil
+	// so the input `header` will at a disadvantage during reorg
+	return 0
 }
 
 // NewLightChain returns a fully initialised light chain using information
@@ -413,6 +432,9 @@ func (lc *LightChain) InsertHeaderChain(chain []*types.Header) (int, error) {
 	case core.CanonStatTy:
 		lc.chainFeed.Send(core.ChainEvent{Block: block, Hash: block.Hash()})
 		lc.chainHeadFeed.Send(core.ChainHeadEvent{Block: block})
+		if posa, ok := lc.Engine().(consensus.PoSA); ok {
+			lc.finalizedHeaderFeed.Send(core.FinalizedHeaderEvent{Header: posa.ComprobeLastBlock(lc, block.Header())})
+		}
 	case core.SideStatTy:
 		lc.chainSideFeed.Send(core.ChainSideEvent{Block: block})
 	}

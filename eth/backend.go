@@ -30,6 +30,7 @@ import (
 	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/consensus/beacon"
 	"github.com/ethereum/go-ethereum/consensus/clique"
+	"github.com/ethereum/go-ethereum/consensus/zephyria"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/bloombits"
 	"github.com/ethereum/go-ethereum/core/rawdb"
@@ -57,6 +58,7 @@ import (
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/ethereum/go-ethereum/metrics"
 )
 
 // Config contains the configuration options of the ETH protocol.
@@ -133,38 +135,27 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	if err != nil {
 		return nil, err
 	}
-	scheme, err := rawdb.ParseStateScheme(config.StateScheme, chainDb)
-	if err != nil {
-		return nil, err
-	}
 	// Try to recover offline state pruning only in hash-based.
-	if scheme == rawdb.HashScheme {
+	if config.StateScheme == rawdb.HashScheme {
 		if err := pruner.RecoverPruning(stack.ResolvePath(""), chainDb); err != nil {
 			log.Error("Failed to recover state", "error", err)
 		}
 	}
 	// Transfer mining-related config to the ethash config.
-	chainConfig, err := core.LoadChainConfig(chainDb, config.Genesis)
+	chainConfig, genesisHash, err := core.LoadChainConfig(chainDb, config.Genesis)
 	if err != nil {
 		return nil, err
 	}
-	engine, err := ethconfig.CreateConsensusEngine(chainConfig, chainDb)
-	if err != nil {
-		return nil, err
-	}
-	networkID := config.NetworkId
-	if networkID == 0 {
-		networkID = chainConfig.ChainID.Uint64()
-	}
+	
+
 	eth := &Ethereum{
 		config:            config,
 		merger:            consensus.NewMerger(chainDb),
 		chainDb:           chainDb,
 		eventMux:          stack.EventMux(),
 		accountManager:    stack.AccountManager(),
-		engine:            engine,
 		closeBloomHandler: make(chan struct{}),
-		networkID:         networkID,
+		networkID:         config.NetworkId,
 		gasPrice:          config.Miner.GasPrice,
 		etherbase:         config.Miner.Etherbase,
 		bloomRequests:     make(chan chan *bloombits.Retrieval),
@@ -172,12 +163,23 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		p2pServer:         stack.Server(),
 		shutdownTracker:   shutdowncheck.NewShutdownTracker(chainDb),
 	}
+
+	eth.APIBackend = &EthAPIBackend{stack.Config().ExtRPCEnabled(), stack.Config().AllowUnprotectedTxs, eth, nil}
+	if eth.APIBackend.allowUnprotectedTxs {
+		log.Info("Unprotected transactions allowed")
+	}
+	ethAPI := ethapi.NewBlockChainAPI(eth.APIBackend)
+	eth.engine, err = ethconfig.CreateConsensusEngine(chainConfig, chainDb, ethAPI, genesisHash)
+	if err != nil {
+		return nil, err
+	}
+
 	bcVersion := rawdb.ReadDatabaseVersion(chainDb)
 	var dbVer = "<nil>"
 	if bcVersion != nil {
 		dbVer = fmt.Sprintf("%d", *bcVersion)
 	}
-	log.Info("Initialising Ethereum protocol", "network", networkID, "dbversion", dbVer)
+	log.Info("Initialising Ethereum protocol", "network", config.NetworkId, "dbversion", dbVer)
 
 	if !config.SkipBcVersionCheck {
 		if bcVersion != nil && *bcVersion > core.BlockChainVersion {
@@ -202,7 +204,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 			SnapshotLimit:       config.SnapshotCache,
 			Preimages:           config.Preimages,
 			StateHistory:        config.StateHistory,
-			StateScheme:         scheme,
+			StateScheme:         config.StateScheme,
 		}
 	)
 	// Override the chain config with provided settings.
@@ -240,7 +242,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		Chain:          eth.blockchain,
 		TxPool:         eth.txPool,
 		Merger:         eth.merger,
-		Network:        networkID,
+		Network:        config.NetworkId,
 		Sync:           config.SyncMode,
 		BloomCache:     uint64(cacheLimit),
 		EventMux:       eth.eventMux,
@@ -274,7 +276,7 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 	}
 
 	// Start the RPC service
-	eth.netRPCService = ethapi.NewNetAPI(eth.p2pServer, networkID)
+	eth.netRPCService = ethapi.NewNetAPI(eth.p2pServer, config.NetworkId)
 
 	// Register the backend on the node
 	stack.RegisterAPIs(eth.APIs())
@@ -402,6 +404,9 @@ func (s *Ethereum) shouldPreserve(header *types.Header) bool {
 	if _, ok := s.engine.(*clique.Clique); ok {
 		return false
 	}
+	if _, ok := s.engine.(*zephyria.Zephyria); ok {
+		return false
+	}
 	return s.isLocalBlock(header)
 }
 
@@ -447,6 +452,19 @@ func (s *Ethereum) StartMining() error {
 				return fmt.Errorf("signer missing: %v", err)
 			}
 			cli.Authorize(eb, wallet.SignData)
+		}
+		if zephyria, ok := s.engine.(*zephyria.Zephyria); ok {
+			wallet, err := s.accountManager.Find(accounts.Account{Address: eb})
+			if wallet == nil || err != nil {
+				log.Error("Etherbase account unavailable locally", "err", err)
+				return fmt.Errorf("signer missing: %v", err)
+			}
+			zephyria.Authorize(eb, wallet.SignData, wallet.SignTx)
+
+			minerInfo := metrics.Get("miner-info")
+			if minerInfo != nil {
+				minerInfo.(metrics.Label).Value()["Etherbase"] = eb.String()
+			}
 		}
 		// If mining is started, we can disable the transaction rejection mechanism
 		// introduced to speed sync times.

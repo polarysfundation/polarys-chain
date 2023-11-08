@@ -675,6 +675,10 @@ func (s *BlockChainAPI) GetProof(ctx context.Context, address common.Address, st
 		keys         = make([]common.Hash, len(storageKeys))
 		keyLengths   = make([]int, len(storageKeys))
 		storageProof = make([]StorageResult, len(storageKeys))
+
+		storageTrie state.Trie
+		storageHash = types.EmptyRootHash
+		codeHash    = types.EmptyCodeHash
 	)
 	// Deserialize all keys. This prevents state access on invalid input.
 	for i, hexKey := range storageKeys {
@@ -684,49 +688,51 @@ func (s *BlockChainAPI) GetProof(ctx context.Context, address common.Address, st
 			return nil, err
 		}
 	}
-	statedb, header, err := s.b.StateAndHeaderByNumberOrHash(ctx, blockNrOrHash)
-	if statedb == nil || err != nil {
+	state, header, err := s.b.StateAndHeaderByNumberOrHash(ctx, blockNrOrHash)
+	if state == nil || err != nil {
 		return nil, err
 	}
-	codeHash := statedb.GetCodeHash(address)
-	storageRoot := statedb.GetStorageRoot(address)
-
-	if len(keys) > 0 {
-		var storageTrie state.Trie
-		if storageRoot != types.EmptyRootHash && storageRoot != (common.Hash{}) {
-			id := trie.StorageTrieID(header.Root, crypto.Keccak256Hash(address.Bytes()), storageRoot)
-			st, err := trie.NewStateTrie(id, statedb.Database().TrieDB())
-			if err != nil {
-				return nil, err
-			}
-			storageTrie = st
+	if storageRoot := state.GetStorageRoot(address); storageRoot != types.EmptyRootHash && storageRoot != (common.Hash{}) {
+		id := trie.StorageTrieID(header.Root, crypto.Keccak256Hash(address.Bytes()), storageRoot)
+		tr, err := trie.NewStateTrie(id, state.Database().TrieDB())
+		if err != nil {
+			return nil, err
 		}
-		// Create the proofs for the storageKeys.
-		for i, key := range keys {
-			// Output key encoding is a bit special: if the input was a 32-byte hash, it is
-			// returned as such. Otherwise, we apply the QUANTITY encoding mandated by the
-			// JSON-RPC spec for getProof. This behavior exists to preserve backwards
-			// compatibility with older client versions.
-			var outputKey string
-			if keyLengths[i] != 32 {
-				outputKey = hexutil.EncodeBig(key.Big())
-			} else {
-				outputKey = hexutil.Encode(key[:])
-			}
-			if storageTrie == nil {
-				storageProof[i] = StorageResult{outputKey, &hexutil.Big{}, []string{}}
-				continue
-			}
-			var proof proofList
-			if err := storageTrie.Prove(crypto.Keccak256(key.Bytes()), &proof); err != nil {
-				return nil, err
-			}
-			value := (*hexutil.Big)(statedb.GetState(address, key).Big())
-			storageProof[i] = StorageResult{outputKey, value, proof}
-		}
+		storageTrie = tr
 	}
+	// If we have a storageTrie, the account exists and we must update
+	// the storage root hash and the code hash.
+	if storageTrie != nil {
+		storageHash = storageTrie.Hash()
+		codeHash = state.GetCodeHash(address)
+	}
+	// Create the proofs for the storageKeys.
+	for i, key := range keys {
+		// Output key encoding is a bit special: if the input was a 32-byte hash, it is
+		// returned as such. Otherwise, we apply the QUANTITY encoding mandated by the
+		// JSON-RPC spec for getProof. This behavior exists to preserve backwards
+		// compatibility with older client versions.
+		var outputKey string
+		if keyLengths[i] != 32 {
+			outputKey = hexutil.EncodeBig(key.Big())
+		} else {
+			outputKey = hexutil.Encode(key[:])
+		}
+
+		if storageTrie == nil {
+			storageProof[i] = StorageResult{outputKey, &hexutil.Big{}, []string{}}
+			continue
+		}
+		var proof proofList
+		if err := storageTrie.Prove(crypto.Keccak256(key.Bytes()), &proof); err != nil {
+			return nil, err
+		}
+		value := (*hexutil.Big)(state.GetState(address, key).Big())
+		storageProof[i] = StorageResult{outputKey, value, proof}
+	}
+
 	// Create the accountProof.
-	tr, err := trie.NewStateTrie(trie.StateTrieID(header.Root), statedb.Database().TrieDB())
+	tr, err := trie.NewStateTrie(trie.StateTrieID(header.Root), state.Database().TrieDB())
 	if err != nil {
 		return nil, err
 	}
@@ -737,12 +743,12 @@ func (s *BlockChainAPI) GetProof(ctx context.Context, address common.Address, st
 	return &AccountResult{
 		Address:      address,
 		AccountProof: accountProof,
-		Balance:      (*hexutil.Big)(statedb.GetBalance(address)),
+		Balance:      (*hexutil.Big)(state.GetBalance(address)),
 		CodeHash:     codeHash,
-		Nonce:        hexutil.Uint64(statedb.GetNonce(address)),
-		StorageHash:  storageRoot,
+		Nonce:        hexutil.Uint64(state.GetNonce(address)),
+		StorageHash:  storageHash,
 		StorageProof: storageProof,
-	}, statedb.Error()
+	}, state.Error()
 }
 
 // decodeHash parses a hex-encoded 32-byte hash. The input may optionally
@@ -1156,12 +1162,8 @@ func (e *revertError) ErrorData() interface{} {
 //
 // Note, this function doesn't make and changes in the state/blockchain and is
 // useful to execute and retrieve values.
-func (s *BlockChainAPI) Call(ctx context.Context, args TransactionArgs, blockNrOrHash *rpc.BlockNumberOrHash, overrides *StateOverride, blockOverrides *BlockOverrides) (hexutil.Bytes, error) {
-	if blockNrOrHash == nil {
-		latest := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
-		blockNrOrHash = &latest
-	}
-	result, err := DoCall(ctx, s.b, args, *blockNrOrHash, overrides, blockOverrides, s.b.RPCEVMTimeout(), s.b.RPCGasCap())
+func (s *BlockChainAPI) Call(ctx context.Context, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, blockOverrides *BlockOverrides) (hexutil.Bytes, error) {
+	result, err := DoCall(ctx, s.b, args, blockNrOrHash, overrides, blockOverrides, s.b.RPCEVMTimeout(), s.b.RPCGasCap())
 	if err != nil {
 		return nil, err
 	}
@@ -1271,7 +1273,7 @@ func DoEstimateGas(ctx context.Context, b Backend, args TransactionArgs, blockNr
 		return 0, err
 	}
 	if failed {
-		if result != nil && !errors.Is(result.Err, vm.ErrOutOfGas) {
+		if result != nil && result.Err != vm.ErrOutOfGas {
 			if len(result.Revert()) > 0 {
 				return 0, newRevertError(result)
 			}
@@ -1321,6 +1323,151 @@ func (s *BlockChainAPI) EstimateGas(ctx context.Context, args TransactionArgs, b
 		bNrOrHash = *blockNrOrHash
 	}
 	return DoEstimateGas(ctx, s.b, args, bNrOrHash, overrides, s.b.RPCGasCap())
+}
+
+func (s *BlockChainAPI) needToReplay(ctx context.Context, block *types.Block, accounts []common.Address) (bool, error) {
+	receipts, err := s.b.GetReceipts(ctx, block.Hash())
+	if err != nil || len(receipts) != len(block.Transactions()) {
+		return false, fmt.Errorf("receipt incorrect for block number (%d): %v", block.NumberU64(), err)
+	}
+
+	accountSet := make(map[common.Address]struct{}, len(accounts))
+	for _, account := range accounts {
+		accountSet[account] = struct{}{}
+	}
+	spendValueMap := make(map[common.Address]int64, len(accounts))
+	receiveValueMap := make(map[common.Address]int64, len(accounts))
+
+	signer := types.MakeSigner(s.b.ChainConfig(), block.Number(), block.Time())
+	for index, tx := range block.Transactions() {
+		receipt := receipts[index]
+		from, err := types.Sender(signer, tx)
+		if err != nil {
+			return false, fmt.Errorf("get sender for tx failed: %v", err)
+		}
+
+		if _, exists := accountSet[from]; exists {
+			spendValueMap[from] += int64(receipt.GasUsed) * tx.GasPrice().Int64()
+			if receipt.Status == types.ReceiptStatusSuccessful {
+				spendValueMap[from] += tx.Value().Int64()
+			}
+		}
+
+		if tx.To() == nil {
+			continue
+		}
+
+		if _, exists := accountSet[*tx.To()]; exists && receipt.Status == types.ReceiptStatusSuccessful {
+			receiveValueMap[*tx.To()] += tx.Value().Int64()
+		}
+	}
+
+	parent, err := s.b.BlockByHash(ctx, block.ParentHash())
+	if err != nil {
+		return false, fmt.Errorf("block not found for block number (%d): %v", block.NumberU64()-1, err)
+	}
+	parentState, err := s.b.Chain().StateAt(parent.Root())
+	if err != nil {
+		return false, fmt.Errorf("statedb not found for block number (%d): %v", block.NumberU64()-1, err)
+	}
+	currentState, err := s.b.Chain().StateAt(block.Root())
+	if err != nil {
+		return false, fmt.Errorf("statedb not found for block number (%d): %v", block.NumberU64(), err)
+	}
+	for _, account := range accounts {
+		parentBalance := parentState.GetBalance(account).Int64()
+		currentBalance := currentState.GetBalance(account).Int64()
+		if receiveValueMap[account]-spendValueMap[account] != currentBalance-parentBalance {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (s *BlockChainAPI) replay(ctx context.Context, block *types.Block, accounts []common.Address) (*types.DiffAccountsInBlock, *state.StateDB, error) {
+	result := &types.DiffAccountsInBlock{
+		Number:       block.NumberU64(),
+		BlockHash:    block.Hash(),
+		Transactions: make([]types.DiffAccountsInTx, 0),
+	}
+
+	parent, err := s.b.BlockByHash(ctx, block.ParentHash())
+	if err != nil {
+		return nil, nil, fmt.Errorf("block not found for block number (%d): %v", block.NumberU64()-1, err)
+	}
+	statedb, err := s.b.Chain().StateAt(parent.Root())
+	if err != nil {
+		return nil, nil, fmt.Errorf("state not found for block number (%d): %v", block.NumberU64()-1, err)
+	}
+
+	accountSet := make(map[common.Address]struct{}, len(accounts))
+	for _, account := range accounts {
+		accountSet[account] = struct{}{}
+	}
+
+	// Recompute transactions.
+	signer := types.MakeSigner(s.b.ChainConfig(), block.Number(), block.Time())
+	for _, tx := range block.Transactions() {
+		// Skip data empty tx and to is one of the interested accounts tx.
+		skip := false
+		if len(tx.Data()) == 0 {
+			skip = true
+		} else if to := tx.To(); to != nil {
+			if _, exists := accountSet[*to]; exists {
+				skip = true
+			}
+		}
+
+		diffTx := types.DiffAccountsInTx{
+			TxHash:   tx.Hash(),
+			Accounts: make(map[common.Address]*big.Int, len(accounts)),
+		}
+
+		if !skip {
+			// Record account balance
+			for _, account := range accounts {
+				diffTx.Accounts[account] = statedb.GetBalance(account)
+			}
+		}
+
+		// Apply transaction
+		msg, _ := core.TransactionToMessage(tx, signer, parent.Header().BaseFee)
+		txContext := core.NewEVMTxContext(msg)
+		context := core.NewEVMBlockContext(block.Header(), s.b.Chain(), nil)
+		vmenv := vm.NewEVM(context, txContext, statedb, s.b.ChainConfig(), vm.Config{})
+
+		if posa, ok := s.b.Engine().(consensus.PoSA); ok {
+			if isSystem, _ := posa.IsSystemTransaction(tx, block.Header()); isSystem {
+				balance := statedb.GetBalance(consensus.SystemAddress)
+				if balance.Cmp(common.Big0) > 0 {
+					statedb.SetBalance(consensus.SystemAddress, big.NewInt(0))
+					statedb.AddBalance(block.Header().Coinbase, balance)
+				}
+			}
+		}
+
+		if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(tx.Gas())); err != nil {
+			return nil, nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)
+		}
+		statedb.Finalise(vmenv.ChainConfig().IsEIP158(block.Number()))
+
+		if !skip {
+			// Compute account balance diff.
+			for _, account := range accounts {
+				diffTx.Accounts[account] = new(big.Int).Sub(statedb.GetBalance(account), diffTx.Accounts[account])
+				if diffTx.Accounts[account].Cmp(big.NewInt(0)) == 0 {
+					delete(diffTx.Accounts, account)
+				}
+			}
+
+			if len(diffTx.Accounts) != 0 {
+				result.Transactions = append(result.Transactions, diffTx)
+			}
+		}
+	}
+
+	return result, statedb, nil
 }
 
 // RPCMarshalHeader converts the given header to the RPC output .

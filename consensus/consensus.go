@@ -19,12 +19,17 @@ package consensus
 
 import (
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/ethereum/go-ethereum/rpc"
+)
+
+var (
+	SystemAddress = common.HexToAddress("0xffffFFFfFFffffffffffffffFfFFFfffFFFfFFfE")
 )
 
 // ChainHeaderReader defines a small collection of methods needed to access the local
@@ -47,6 +52,8 @@ type ChainHeaderReader interface {
 
 	// GetTd retrieves the total difficulty from the database by hash and number.
 	GetTd(hash common.Hash, number uint64) *big.Int
+
+	GetHighestVerifiedHeader() *types.Header
 }
 
 // ChainReader defines a small collection of methods needed to access the local
@@ -88,8 +95,8 @@ type Engine interface {
 	//
 	// Note: The state database might be updated to reflect any consensus rules
 	// that happen at finalization (e.g. block rewards).
-	Finalize(chain ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction,
-		uncles []*types.Header, withdrawals []*types.Withdrawal)
+	Finalize(chain ChainHeaderReader, header *types.Header, state *state.StateDB, txs *[]*types.Transaction,
+		uncles []*types.Header, withdrawals []*types.Withdrawal, receipts *[]*types.Receipt, systemTxs *[]*types.Transaction, usedGas *uint64) error
 
 	// FinalizeAndAssemble runs any post-transaction state modifications (e.g. block
 	// rewards or process withdrawals) and assembles the final block.
@@ -97,7 +104,7 @@ type Engine interface {
 	// Note: The block header and state database might be updated to reflect any
 	// consensus rules that happen at finalization (e.g. block rewards).
 	FinalizeAndAssemble(chain ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction,
-		uncles []*types.Header, receipts []*types.Receipt, withdrawals []*types.Withdrawal) (*types.Block, error)
+		uncles []*types.Header, receipts []*types.Receipt, withdrawals []*types.Withdrawal) (*types.Block, []*types.Receipt, error)
 
 	// Seal generates a new sealing request for the given input block and pushes
 	// the result into the given channel.
@@ -107,7 +114,7 @@ type Engine interface {
 	Seal(chain ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error
 
 	// SealHash returns the hash of a block prior to it being sealed.
-	SealHash(header *types.Header) common.Hash
+	SealHash(header *types.Header) (hash common.Hash)
 
 	// CalcDifficulty is the difficulty adjustment algorithm. It returns the difficulty
 	// that a new block should have.
@@ -115,6 +122,8 @@ type Engine interface {
 
 	// APIs returns the RPC APIs this consensus engine provides.
 	APIs(chain ChainHeaderReader) []rpc.API
+
+	Delay(chain ChainReader, header *types.Header, leftOver *time.Duration) *time.Duration
 
 	// Close terminates any background threads maintained by the consensus engine.
 	Close() error
@@ -126,4 +135,16 @@ type PoW interface {
 
 	// Hashrate returns the current mining hashrate of a PoW consensus engine.
 	Hashrate() float64
+}
+
+type PoSA interface {
+	Engine
+
+	IsSystemContract(to *common.Address) bool
+	IsSystemTransaction(tx *types.Transaction, header *types.Header) (bool, error)
+	EnoughDistance(chain ChainReader, header *types.Header) bool
+	IsLocalBlock(header *types.Header) bool
+	AllowLightProcess(chain ChainReader, currentHeader *types.Header) bool
+	ComprobeLastBlock(chain ChainHeaderReader, currentHeader *types.Header) *types.Header
+	GetSafeBlock(chain ChainReader, currentHeader *types.Header) (uint64, error)
 }

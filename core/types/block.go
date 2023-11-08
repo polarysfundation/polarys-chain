@@ -415,6 +415,8 @@ func (b *Block) Size() uint64 {
 	return uint64(c)
 }
 
+func (b *Block) SetRoot(root common.Hash) { b.header.Root = root }
+
 // SanityCheck can be used to prevent that unbounded fields are
 // stuffed with junk data to add processing overhead
 func (b *Block) SanityCheck() error {
@@ -511,4 +513,15 @@ func HeaderParentHashFromRLP(header []byte) common.Hash {
 		return common.Hash{}
 	}
 	return common.BytesToHash(parentHash)
+}
+
+type DiffAccountsInTx struct {
+	TxHash   common.Hash
+	Accounts map[common.Address]*big.Int
+}
+
+type DiffAccountsInBlock struct {
+	Number       uint64
+	BlockHash    common.Hash
+	Transactions []DiffAccountsInTx
 }

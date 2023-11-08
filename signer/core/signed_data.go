@@ -21,12 +21,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"mime"
 
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/consensus/clique"
+	"github.com/ethereum/go-ethereum/consensus/zephyria"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/rlp"
@@ -164,6 +166,41 @@ func (api *SignerAPI) determineSignatureFormat(ctx context.Context, contentType 
 		// Clique uses V on the form 0 or 1
 		useEthereumV = false
 		req = &SignDataRequest{ContentType: mediaType, Rawdata: cliqueRlp, Messages: messages, Hash: sighash}
+	case apitypes.AplicationZephyria.Mime:
+		stringData, ok := data.(string)
+		if !ok {
+			return nil, useEthereumV, fmt.Errorf("input for %v must be an hex-encoded string", apitypes.AplicationZephyria.Mime)
+		}
+		zephyriaData, err := hexutil.Decode(stringData)
+		if err != nil {
+			return nil, useEthereumV, err
+		}
+		header := &types.Header{}
+		if err := rlp.DecodeBytes(zephyriaData, header); err != nil {
+			return nil, useEthereumV, err
+		}
+		// The incoming parlia header is already truncated, sent to us with a extradata already shortened
+		if len(header.Extra) < 65 {
+			// Need to add it back, to get a suitable length for hashing
+			newExtra := make([]byte, len(header.Extra)+65)
+			copy(newExtra, header.Extra)
+			header.Extra = newExtra
+		}
+		// Get back the rlp data, encoded by us
+		sighash, zephyriaRLP, err := zephyriaHeaderHashAndRlp(header, api.chainID)
+		if err != nil {
+			return nil, useEthereumV, err
+		}
+		messages := []*apitypes.NameValueType{
+			{
+				Name:  "Zephyria header",
+				Typ:   "zephyria",
+				Value: fmt.Sprintf("zephyria header %d [0x%x]", header.Number, header.Hash()),
+			},
+		}
+		// Zephyria uses V on the form 0 or 1
+		useEthereumV = false
+		req = &SignDataRequest{ContentType: mediaType, Rawdata: zephyriaRLP, Messages: messages, Hash: sighash}
 	case apitypes.DataTyped.Mime:
 		// EIP-712 conformant typed data
 		var err error
@@ -216,6 +253,16 @@ func cliqueHeaderHashAndRlp(header *types.Header) (hash, rlp []byte, err error) 
 	}
 	rlp = clique.CliqueRLP(header)
 	hash = clique.SealHash(header).Bytes()
+	return hash, rlp, err
+}
+
+func zephyriaHeaderHashAndRlp(header *types.Header, chainId *big.Int) (hash, rlp []byte, err error) {
+	if len(header.Extra) < 65 {
+		err = fmt.Errorf("clique header extradata too short, %d < 65", len(header.Extra))
+		return
+	}
+	rlp = zephyria.ZephyriaRLP(header, chainId)
+	hash = zephyria.SealHash(header, chainId).Bytes()
 	return hash, rlp, err
 }
 

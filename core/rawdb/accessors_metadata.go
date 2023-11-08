@@ -18,6 +18,7 @@ package rawdb
 
 import (
 	"encoding/json"
+	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -92,6 +93,13 @@ func ReadGenesisStateSpec(db ethdb.KeyValueReader, blockhash common.Hash) []byte
 func WriteGenesisStateSpec(db ethdb.KeyValueWriter, blockhash common.Hash, data []byte) {
 	if err := db.Put(genesisStateSpecKey(blockhash), data); err != nil {
 		log.Crit("Failed to store genesis state", "err", err)
+	}
+}
+
+// WriteSafePointBlockNumber write the number of block that roothash save to disk
+func WriteSafePointBlockNumber(db ethdb.KeyValueWriter, number uint64) {
+	if err := db.Put(LastSafePointBlockKey, new(big.Int).SetUint64(number).Bytes()); err != nil {
+		log.Crit("Failed to store safe point of block number", "err", err)
 	}
 }
 

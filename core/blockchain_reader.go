@@ -53,13 +53,31 @@ func (bc *BlockChain) CurrentSnapBlock() *types.Header {
 // CurrentFinalBlock retrieves the current finalized block of the canonical
 // chain. The block is retrieved from the blockchain's internal cache.
 func (bc *BlockChain) CurrentFinalBlock() *types.Header {
-	return bc.currentFinalBlock.Load()
+	if p, ok := bc.engine.(consensus.PoSA); ok {
+		currentHeader := bc.CurrentHeader()
+		if currentHeader == nil {
+			return nil
+		}
+		return p.ComprobeLastBlock(bc, currentHeader)
+	}
+
+	return nil
 }
 
 // CurrentSafeBlock retrieves the current safe block of the canonical
 // chain. The block is retrieved from the blockchain's internal cache.
 func (bc *BlockChain) CurrentSafeBlock() *types.Header {
-	return bc.currentSafeBlock.Load()
+	if p, ok := bc.engine.(consensus.PoSA); ok {
+		currentHeader := bc.CurrentHeader()
+		if currentHeader == nil {
+			return nil
+		}
+		safeBlock, err := p.GetSafeBlock(bc, currentHeader)
+		if err == nil {
+			return bc.GetHeaderByNumber(safeBlock)
+		}
+	}
+	return nil
 }
 
 // HasHeader checks if a block header is present in the database or not, caching

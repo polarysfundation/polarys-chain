@@ -230,9 +230,7 @@ func (dl *diskLayer) proveRange(ctx *generatorContext, trieId *trie.ID, prefix [
 	if origin == nil && !diskMore {
 		stackTr := trie.NewStackTrie(nil)
 		for i, key := range keys {
-			if err := stackTr.Update(key, vals[i]); err != nil {
-				return nil, err
-			}
+			stackTr.Update(key, vals[i])
 		}
 		if gotRoot := stackTr.Hash(); gotRoot != root {
 			return &proofResult{
@@ -249,6 +247,11 @@ func (dl *diskLayer) proveRange(ctx *generatorContext, trieId *trie.ID, prefix [
 		ctx.stats.Log("Trie missing, state snapshotting paused", dl.root, dl.genMarker)
 		return nil, errMissingTrie
 	}
+	// Firstly find out the key of last iterated element.
+	var last []byte
+	if len(keys) > 0 {
+		last = keys[len(keys)-1]
+	}
 	// Generate the Merkle proofs for the first and last element
 	if origin == nil {
 		origin = common.Hash{}.Bytes()
@@ -263,9 +266,9 @@ func (dl *diskLayer) proveRange(ctx *generatorContext, trieId *trie.ID, prefix [
 			tr:       tr,
 		}, nil
 	}
-	if len(keys) > 0 {
-		if err := tr.Prove(keys[len(keys)-1], proof); err != nil {
-			log.Debug("Failed to prove range", "kind", kind, "last", keys[len(keys)-1], "err", err)
+	if last != nil {
+		if err := tr.Prove(last, proof); err != nil {
+			log.Debug("Failed to prove range", "kind", kind, "last", last, "err", err)
 			return &proofResult{
 				keys:     keys,
 				vals:     vals,
@@ -277,7 +280,7 @@ func (dl *diskLayer) proveRange(ctx *generatorContext, trieId *trie.ID, prefix [
 	}
 	// Verify the snapshot segment with range prover, ensure that all flat states
 	// in this range correspond to merkle trie.
-	cont, err := trie.VerifyRangeProof(root, origin, keys, vals, proof)
+	cont, err := trie.VerifyRangeProof(root, origin, last, keys, vals, proof)
 	return &proofResult{
 			keys:     keys,
 			vals:     vals,

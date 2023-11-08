@@ -47,6 +47,7 @@ type Backend interface {
 type Config struct {
 	Etherbase common.Address `toml:",omitempty"` // Public address for block mining rewards
 	ExtraData hexutil.Bytes  `toml:",omitempty"` // Block extra data set by the miner
+	DelayLeftOver time.Duration  // Time reserved to finalize a block(calculate root, distribute income...)
 	GasFloor  uint64         // Target gas floor for mined blocks.
 	GasCeil   uint64         // Target gas ceiling for mined blocks.
 	GasPrice  *big.Int       // Minimum gas price for mining a transaction

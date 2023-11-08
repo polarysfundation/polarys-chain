@@ -30,6 +30,9 @@ type NewMinedBlockEvent struct{ Block *types.Block }
 // RemovedLogsEvent is posted when a reorg happens
 type RemovedLogsEvent struct{ Logs []*types.Log }
 
+type FinalizedHeaderEvent struct{ Header *types.Header }
+
+
 type ChainEvent struct {
 	Block *types.Block
 	Hash  common.Hash

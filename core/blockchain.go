@@ -62,6 +62,9 @@ var (
 
 	chainInfoGauge = metrics.NewRegisteredGaugeInfo("chain/info", nil)
 
+	justifiedBlockGauge = metrics.NewRegisteredGauge("chain/head/justified", nil)
+	finalizedBlockGauge = metrics.NewRegisteredGauge("chain/head/finalized", nil)
+
 	accountReadTimer   = metrics.NewRegisteredTimer("chain/account/reads", nil)
 	accountHashTimer   = metrics.NewRegisteredTimer("chain/account/hashes", nil)
 	accountUpdateTimer = metrics.NewRegisteredTimer("chain/account/updates", nil)
@@ -218,6 +221,7 @@ type BlockChain struct {
 	//  * N:   means N block limit [HEAD-N+1, HEAD] and delete extra indexes
 	//  * nil: disable tx reindexer/deleter, but still index new blocks
 	txLookupLimit uint64
+	triesInMemory uint64
 
 	hc            *HeaderChain
 	rmLogsFeed    event.Feed
@@ -233,10 +237,11 @@ type BlockChain struct {
 	// Readers don't need to take it, they can just read the database.
 	chainmu *syncx.ClosableMutex
 
-	currentBlock      atomic.Pointer[types.Header] // Current head of the chain
-	currentSnapBlock  atomic.Pointer[types.Header] // Current head of snap-sync
-	currentFinalBlock atomic.Pointer[types.Header] // Latest (consensus) finalized block
-	currentSafeBlock  atomic.Pointer[types.Header] // Latest (consensus) safe block
+	highestVerifiedHeader atomic.Pointer[types.Header]
+	currentBlock          atomic.Pointer[types.Header] // Current head of the chain
+	currentSnapBlock      atomic.Pointer[types.Header] // Current head of snap-sync
+	currentFinalBlock     atomic.Pointer[types.Header] // Latest (consensus) finalized block
+	currentSafeBlock      atomic.Pointer[types.Header] // Latest (consensus) safe block
 
 	bodyCache     *lru.Cache[common.Hash, *types.Body]
 	bodyRLPCache  *lru.Cache[common.Hash, rlp.RawValue]
@@ -246,6 +251,8 @@ type BlockChain struct {
 
 	// future blocks are blocks added for later processing
 	futureBlocks *lru.Cache[common.Hash, *types.Block]
+
+	finalizedHeaderFeed event.Feed
 
 	wg            sync.WaitGroup //
 	quit          chan struct{}  // shutdown signal, closed in Stop.
@@ -258,6 +265,10 @@ type BlockChain struct {
 	processor  Processor // Block transaction processor interface
 	forker     *ForkChoice
 	vmConfig   vm.Config
+}
+
+func (bc *BlockChain) GetHighestVerifiedHeader() *types.Header {
+	return bc.highestVerifiedHeader.Load()
 }
 
 // NewBlockChain returns a fully initialised block chain using information
@@ -344,7 +355,7 @@ func NewBlockChain(db ethdb.Database, cacheConfig *CacheConfig, genesis *Genesis
 		if head.Number.Uint64() == 0 {
 			// The genesis state is missing, which is only possible in the path-based
 			// scheme. This situation occurs when the initial state sync is not finished
-			// yet, or the chain head is rewound below the pivot point. In both scenarios,
+			// yet, or the chain head is rewound below the pivot point. In both scenario,
 			// there is no possible recovery approach except for rerunning a snap sync.
 			// Do nothing here until the state syncer picks it up.
 			log.Info("Genesis state is missing, wait state sync")
@@ -504,9 +515,12 @@ func (bc *BlockChain) loadLastState() error {
 		log.Warn("Head block missing, resetting chain", "hash", head)
 		return bc.Reset()
 	}
+
 	// Everything seems to be fine, set as the head block
 	bc.currentBlock.Store(headBlock.Header())
 	headBlockGauge.Update(int64(headBlock.NumberU64()))
+	justifiedBlockGauge.Update(int64(bc.GetJustifiedNumber(headBlock.Header())))
+	finalizedBlockGauge.Update(int64(bc.getFinalizedNumber(headBlock.Header())))
 
 	// Restore the last known head header
 	headHeader := headBlock.Header()
@@ -554,6 +568,14 @@ func (bc *BlockChain) loadLastState() error {
 	if headBlock.Hash() != currentSnapBlock.Hash() {
 		snapTd := bc.GetTd(currentSnapBlock.Hash(), currentSnapBlock.Number.Uint64())
 		log.Info("Loaded most recent local snap block", "number", currentSnapBlock.Number, "hash", currentSnapBlock.Hash(), "td", snapTd, "age", common.PrettyAge(time.Unix(int64(currentSnapBlock.Time), 0)))
+	}
+	if posa, ok := bc.engine.(consensus.PoSA); ok {
+		if currentFinalizedHeader := posa.ComprobeLastBlock(bc, headHeader); currentFinalizedHeader != nil {
+			if currentFinalizedBlock := bc.GetBlockByHash(currentFinalizedHeader.Hash()); currentFinalizedBlock != nil {
+				finalTd := bc.GetTd(currentFinalizedBlock.Hash(), currentFinalizedBlock.NumberU64())
+				log.Info("Loaded most recent local finalized block", "number", currentFinalizedBlock.Number(), "hash", currentFinalizedBlock.Hash(), "td", finalTd, "age", common.PrettyAge(time.Unix(int64(currentFinalizedBlock.Time()), 0)))
+			}
+		}
 	}
 	if currentFinalBlock != nil {
 		finalTd := bc.GetTd(currentFinalBlock.Hash(), currentFinalBlock.Number.Uint64())
@@ -630,6 +652,30 @@ func (bc *BlockChain) SetSafe(header *types.Header) {
 	}
 }
 
+// GetJustifiedNumber returns the highest justified blockNumber on the branch including and before `header`.
+func (bc *BlockChain) GetJustifiedNumber(header *types.Header) uint64 {
+	if p, ok := bc.engine.(consensus.PoSA); ok {
+		justifiedBlockNumber, err := p.GetSafeBlock(bc, header)
+		if err == nil {
+			return justifiedBlockNumber
+		}
+	}
+	// return 0 when err!=nil
+	// so the input `header` will at a disadvantage during reorg
+	return 0
+}
+
+// getFinalizedNumber returns the highest finalized number before the specific block.
+func (bc *BlockChain) getFinalizedNumber(header *types.Header) uint64 {
+	if p, ok := bc.engine.(consensus.PoSA); ok {
+		if finalizedHeader := p.ComprobeLastBlock(bc, header); finalizedHeader != nil {
+			return finalizedHeader.Number.Uint64()
+		}
+	}
+
+	return 0
+}
+
 // setHeadBeyondRoot rewinds the local chain to a new head with the extra condition
 // that the rewind must pass the specified state root. This method is meant to be
 // used when rewinding with snapshots enabled to ensure that we go back further than
@@ -666,8 +712,9 @@ func (bc *BlockChain) setHeadBeyondRoot(head uint64, time uint64, root common.Ha
 				log.Error("Gap in the chain, rewinding to genesis", "number", header.Number, "hash", header.Hash())
 				newHeadBlock = bc.genesisBlock
 			} else {
-				// Block exists. Keep rewinding until either we find one with state
-				// or until we exceed the optional threshold root hash
+				// Block exists, keep rewinding until we find one with state,
+				// keeping rewinding until we exceed the optional threshold
+				// root hash
 				beyondRoot := (root == common.Hash{}) // Flag whether we're beyond the requested root (no root, always true)
 
 				for {
@@ -946,6 +993,8 @@ func (bc *BlockChain) writeHeadBlock(block *types.Block) {
 
 	bc.currentBlock.Store(block.Header())
 	headBlockGauge.Update(int64(block.NumberU64()))
+	justifiedBlockGauge.Update(int64(bc.GetJustifiedNumber(block.Header())))
+	finalizedBlockGauge.Update(int64(bc.getFinalizedNumber(block.Header())))
 }
 
 // stopWithoutSaving stops the blockchain service. If any imports are currently in progress
@@ -988,7 +1037,6 @@ func (bc *BlockChain) Stop() {
 		if snapBase, err = bc.snaps.Journal(bc.CurrentBlock().Root); err != nil {
 			log.Error("Failed to journal state snapshot", "err", err)
 		}
-		bc.snaps.Release()
 	}
 	if bc.triedb.Scheme() == rawdb.PathScheme {
 		// Ensure that the in-memory trie nodes are journaled to disk properly.
@@ -1442,32 +1490,49 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	flushInterval := time.Duration(bc.flushInterval.Load())
 	// If we exceeded time allowance, flush an entire trie to disk
 	if bc.gcproc > flushInterval {
-		// If the header is missing (canonical chain behind), we're reorging a low
-		// diff sidechain. Suspend committing until this operation is completed.
-		header := bc.GetHeaderByNumber(chosen)
-		if header == nil {
-			log.Warn("Reorg in progress, trie commit postponed", "number", chosen)
-		} else {
-			// If we're exceeding limits but haven't reached a large enough memory gap,
-			// warn the user that the system is becoming unstable.
-			if chosen < bc.lastWrite+TriesInMemory && bc.gcproc >= 2*flushInterval {
-				log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", flushInterval, "optimum", float64(chosen-bc.lastWrite)/TriesInMemory)
+		canWrite := true
+		if posa, ok := bc.engine.(consensus.PoSA); ok {
+			if !posa.EnoughDistance(bc, block.Header()) {
+				canWrite = false
 			}
-			// Flush an entire trie and restart the counters
-			bc.triedb.Commit(header.Root, true)
-			bc.lastWrite = chosen
-			bc.gcproc = 0
 		}
-	}
-	// Garbage collect anything below our required write retention
-	for !bc.triegc.Empty() {
-		root, number := bc.triegc.Pop()
-		if uint64(-number) > chosen {
-			bc.triegc.Push(root, number)
-			break
+		if canWrite {
+			// If the header is missing (canonical chain behind), we're reorging a low
+			// diff sidechain. Suspend committing until this operation is completed.
+			header := bc.GetHeaderByNumber(chosen)
+			if header == nil {
+				log.Warn("Reorg in progress, trie commit postponed", "number", chosen)
+			} else {
+				// If we're exceeding limits but haven't reached a large enough memory gap,
+				// warn the user that the system is becoming unstable.
+				if chosen < bc.lastWrite+bc.triesInMemory && bc.gcproc >= 2*flushInterval {
+					log.Info("State in memory for too long, committing", "time", bc.gcproc, "allowance", flushInterval, "optimum", float64(chosen-bc.lastWrite)/float64(bc.triesInMemory))
+				}
+				// Flush an entire trie and restart the counters
+				bc.triedb.Commit(header.Root, true)
+				rawdb.WriteSafePointBlockNumber(bc.db, chosen)
+				bc.lastWrite = chosen
+				bc.gcproc = 0
+			}
 		}
-		bc.triedb.Dereference(root)
+		// Garbage collect anything below our required write retention
+		wg2 := sync.WaitGroup{}
+		for !bc.triegc.Empty() {
+			root, number := bc.triegc.Pop()
+			if uint64(-number) > chosen {
+				bc.triegc.Push(root, number)
+				break
+			}
+			wg2.Add(1)
+			go func() {
+				bc.triedb.Dereference(root)
+				wg2.Done()
+			}()
+		}
+		wg2.Wait()
 	}
+	bc.wg.Wait()
+
 	return nil
 }
 
@@ -1522,6 +1587,11 @@ func (bc *BlockChain) writeBlockAndSetHead(block *types.Block, receipts []*types
 		// event here.
 		if emitHeadEvent {
 			bc.chainHeadFeed.Send(ChainHeadEvent{Block: block})
+			if posa, ok := bc.Engine().(consensus.PoSA); ok {
+				if finalizedHeader := posa.ComprobeLastBlock(bc, block.Header()); finalizedHeader != nil {
+					bc.finalizedHeaderFeed.Send(FinalizedHeaderEvent{finalizedHeader})
+				}
+			}
 		}
 	} else {
 		bc.chainSideFeed.Send(ChainSideEvent{Block: block})
@@ -1807,7 +1877,7 @@ func (bc *BlockChain) insertChain(chain types.Blocks, setHead bool) (int, error)
 
 		// Process block using the parent state as reference point
 		pstart := time.Now()
-		receipts, logs, usedGas, err := bc.processor.Process(block, statedb, bc.vmConfig)
+		statedb, receipts, logs, usedGas, err := bc.processor.Process(block, statedb, bc.vmConfig)
 		if err != nil {
 			bc.reportBlock(block, receipts, err)
 			followupInterrupt.Store(true)

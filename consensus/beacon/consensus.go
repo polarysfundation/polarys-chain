@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus"
@@ -346,11 +347,16 @@ func (beacon *Beacon) Prepare(chain consensus.ChainHeaderReader, header *types.H
 	return nil
 }
 
+func (beacon *Beacon) Delay(chain consensus.ChainReader, header *types.Header, leftOver *time.Duration) *time.Duration {
+	return nil
+}
+
 // Finalize implements consensus.Engine and processes withdrawals on top.
-func (beacon *Beacon) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, withdrawals []*types.Withdrawal) {
+func (beacon *Beacon) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs *[]*types.Transaction, uncles []*types.Header, withdrawals []*types.Withdrawal, _ *[]*types.Receipt, _ *[]*types.Transaction, _ *uint64) error {
+	// Finalize is different with Prepare, it can be used in both block verification.
 	if !beacon.IsPoSHeader(header) {
-		beacon.ethone.Finalize(chain, header, state, txs, uncles, nil)
-		return
+		beacon.ethone.Finalize(chain, header, state, txs, uncles, nil, nil, nil, nil)
+		return nil
 	}
 	// Withdrawals processing.
 	for _, w := range withdrawals {
@@ -360,11 +366,13 @@ func (beacon *Beacon) Finalize(chain consensus.ChainHeaderReader, header *types.
 		state.AddBalance(w.Address, amount)
 	}
 	// No block reward which is issued by consensus layer instead.
+	return nil
 }
 
 // FinalizeAndAssemble implements consensus.Engine, setting the final state and
 // assembling the block.
-func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt, withdrawals []*types.Withdrawal) (*types.Block, error) {
+func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt, withdrawals []*types.Withdrawal) (*types.Block, []*types.Receipt, error) {
+	// FinalizeAndAssemble is different with Prepare, it can be used in both block generation.
 	if !beacon.IsPoSHeader(header) {
 		return beacon.ethone.FinalizeAndAssemble(chain, header, state, txs, uncles, receipts, nil)
 	}
@@ -376,17 +384,16 @@ func (beacon *Beacon) FinalizeAndAssemble(chain consensus.ChainHeaderReader, hea
 		}
 	} else {
 		if len(withdrawals) > 0 {
-			return nil, errors.New("withdrawals set before Shanghai activation")
+			return nil, nil, errors.New("withdrawals set before Shanghai activation")
 		}
 	}
 	// Finalize and assemble the block.
-	beacon.Finalize(chain, header, state, txs, uncles, withdrawals)
+	beacon.Finalize(chain, header, state, &txs, uncles, withdrawals, nil, nil, nil)
 
 	// Assign the final state root to header.
 	header.Root = state.IntermediateRoot(true)
 
-	// Assemble and return the final block.
-	return types.NewBlockWithWithdrawals(header, txs, uncles, receipts, withdrawals, trie.NewStackTrie(nil)), nil
+	return types.NewBlockWithWithdrawals(header, txs, uncles, receipts, withdrawals, trie.NewStackTrie(nil)), receipts, nil
 }
 
 // Seal generates a new sealing request for the given input block and pushes
@@ -406,7 +413,7 @@ func (beacon *Beacon) Seal(chain consensus.ChainHeaderReader, block *types.Block
 }
 
 // SealHash returns the hash of a block prior to it being sealed.
-func (beacon *Beacon) SealHash(header *types.Header) common.Hash {
+func (beacon *Beacon) SealHash(header *types.Header) (hash common.Hash) {
 	return beacon.ethone.SealHash(header)
 }
 

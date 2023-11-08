@@ -33,6 +33,11 @@ type Ethash struct {
 	fakeFull  bool           // Accepts everything as valid
 }
 
+// Delay implements consensus.Engine.
+func (*Ethash) Delay(chain consensus.ChainReader, header *types.Header, leftOver *time.Duration) *time.Duration {
+	panic("unimplemented")
+}
+
 // NewFaker creates an ethash consensus engine with a fake PoW scheme that accepts
 // all blocks' seal as valid, though they still have to conform to the Ethereum
 // consensus rules.

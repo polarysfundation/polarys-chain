@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum/core"
+/* 	"github.com/ethereum/go-ethereum/core" */
 	"github.com/ethereum/go-ethereum/core/forkid"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/params"
@@ -228,14 +228,8 @@ func minAgeFilter(args []string) (nodeFilter, error) {
 func ethFilter(args []string) (nodeFilter, error) {
 	var filter forkid.Filter
 	switch args[0] {
-	case "mainnet":
-		filter = forkid.NewStaticFilter(params.MainnetChainConfig, core.DefaultGenesisBlock().ToBlock())
-	case "goerli":
-		filter = forkid.NewStaticFilter(params.GoerliChainConfig, core.DefaultGoerliGenesisBlock().ToBlock())
-	case "sepolia":
-		filter = forkid.NewStaticFilter(params.SepoliaChainConfig, core.DefaultSepoliaGenesisBlock().ToBlock())
-	case "holesky":
-		filter = forkid.NewStaticFilter(params.HoleskyChainConfig, core.DefaultHoleskyGenesisBlock().ToBlock())
+	case "polarys":
+		filter = forkid.NewStaticFilter(params.PolarysChainConfig, params.PolarysGenesisHash)
 	default:
 		return nil, fmt.Errorf("unknown network %q", args[0])
 	}

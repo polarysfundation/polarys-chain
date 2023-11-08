@@ -76,6 +76,22 @@ var PrecompiledContractsIstanbul = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{7}): &bn256ScalarMulIstanbul{},
 	common.BytesToAddress([]byte{8}): &bn256PairingIstanbul{},
 	common.BytesToAddress([]byte{9}): &blake2F{},
+
+	common.BytesToAddress([]byte{100}): &pLightClient{},
+}
+
+var PrecompiledContractsMontanas = map[common.Address]PrecompiledContract{
+	common.BytesToAddress([]byte{1}): &ecrecover{},
+	common.BytesToAddress([]byte{2}): &sha256hash{},
+	common.BytesToAddress([]byte{3}): &ripemd160hash{},
+	common.BytesToAddress([]byte{4}): &dataCopy{},
+	common.BytesToAddress([]byte{5}): &bigModExp{},
+	common.BytesToAddress([]byte{6}): &bn256AddIstanbul{},
+	common.BytesToAddress([]byte{7}): &bn256ScalarMulIstanbul{},
+	common.BytesToAddress([]byte{8}): &bn256PairingIstanbul{},
+	common.BytesToAddress([]byte{9}): &blake2F{},
+
+	common.BytesToAddress([]byte{100}): &pLightClient{},
 }
 
 // PrecompiledContractsBerlin contains the default set of pre-compiled Ethereum
@@ -105,6 +121,8 @@ var PrecompiledContractsCancun = map[common.Address]PrecompiledContract{
 	common.BytesToAddress([]byte{8}):    &bn256PairingIstanbul{},
 	common.BytesToAddress([]byte{9}):    &blake2F{},
 	common.BytesToAddress([]byte{0x0a}): &kzgPointEvaluation{},
+
+	common.BytesToAddress([]byte{100}): &pLightClient{},
 }
 
 // PrecompiledContractsBLS contains the set of pre-compiled Ethereum
@@ -123,6 +141,7 @@ var PrecompiledContractsBLS = map[common.Address]PrecompiledContract{
 
 var (
 	PrecompiledAddressesCancun    []common.Address
+	PrecompiledAddressesMontanas  []common.Address
 	PrecompiledAddressesBerlin    []common.Address
 	PrecompiledAddressesIstanbul  []common.Address
 	PrecompiledAddressesByzantium []common.Address
@@ -142,6 +161,9 @@ func init() {
 	for k := range PrecompiledContractsBerlin {
 		PrecompiledAddressesBerlin = append(PrecompiledAddressesBerlin, k)
 	}
+	for k := range PrecompiledContractsMontanas {
+		PrecompiledAddressesMontanas = append(PrecompiledAddressesMontanas, k)
+	}
 	for k := range PrecompiledContractsCancun {
 		PrecompiledAddressesCancun = append(PrecompiledAddressesCancun, k)
 	}
@@ -152,6 +174,8 @@ func ActivePrecompiles(rules params.Rules) []common.Address {
 	switch {
 	case rules.IsCancun:
 		return PrecompiledAddressesCancun
+	case rules.IsMontanas:
+		return PrecompiledAddressesMontanas
 	case rules.IsBerlin:
 		return PrecompiledAddressesBerlin
 	case rules.IsIstanbul:

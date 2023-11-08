@@ -24,6 +24,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	cmath "github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/params"
@@ -422,19 +423,17 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		// After EIP-3529: refunds are capped to gasUsed / 5
 		st.refundGas(params.RefundQuotientEIP3529)
 	}
+
 	effectiveTip := msg.GasPrice
 	if rules.IsLondon {
 		effectiveTip = cmath.BigMin(msg.GasTipCap, new(big.Int).Sub(msg.GasFeeCap, st.evm.Context.BaseFee))
 	}
 
-	if st.evm.Config.NoBaseFee && msg.GasFeeCap.Sign() == 0 && msg.GasTipCap.Sign() == 0 {
-		// Skip fee payment when NoBaseFee is set and the fee fields
-		// are 0. This avoids a negative effectiveTip being applied to
-		// the coinbase when simulating calls.
+	// consensus is zephyria
+	if st.evm.ChainConfig().Zephyria != nil {
+		st.state.AddBalance(consensus.SystemAddress, new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip))
 	} else {
-		fee := new(big.Int).SetUint64(st.gasUsed())
-		fee.Mul(fee, effectiveTip)
-		st.state.AddBalance(st.evm.Context.Coinbase, fee)
+		st.state.AddBalance(st.evm.Context.Coinbase, new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip))
 	}
 
 	return &ExecutionResult{

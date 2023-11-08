@@ -18,14 +18,18 @@ package discover
 
 import (
 	"crypto/ecdsa"
+/* 	"fmt" */
 	"net"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common/mclock"
+/* 	"github.com/ethereum/go-ethereum/core/forkid" */
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/p2p/enr"
 	"github.com/ethereum/go-ethereum/p2p/netutil"
+/* 	"github.com/ethereum/go-ethereum/params"
+	"github.com/ethereum/go-ethereum/rlp" */
 )
 
 // UDPConn is a network connection on which discovery can operate.
@@ -36,6 +40,30 @@ type UDPConn interface {
 	LocalAddr() net.Addr
 }
 
+/* type NodeFilterFunc func(*enr.Record) bool
+
+func ParseEthFilter(chain string) (NodeFilterFunc, error) {
+	var filter forkid.Filter
+	switch chain {
+	case "polarys":
+		filter = forkid.NewStaticFilter(params.PolarysChainConfig, params.PolarysGenesisHash)
+	default:
+		return nil, fmt.Errorf("unknown network %q", chain)
+	}
+
+	f := func(r *enr.Record) bool {
+		var eth struct {
+			ForkID forkid.ID
+			Tail   []rlp.RawValue `rlp:"tail"`
+		}
+		if r.Load(enr.WithEntry("eth", &eth)) != nil {
+			return false
+		}
+		return filter(eth.ForkID) == nil
+	}
+	return f, nil
+}
+ */
 // Config holds settings for the discovery listener.
 type Config struct {
 	// These settings are required and configure the UDP listener:

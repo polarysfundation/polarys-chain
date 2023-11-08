@@ -43,6 +43,8 @@ type Backend interface {
 	// General Ethereum API
 	SyncProgress() ethereum.SyncProgress
 
+	Chain() *core.BlockChain
+
 	SuggestGasTipCap(ctx context.Context) (*big.Int, error)
 	FeeHistory(ctx context.Context, blockCount uint64, lastBlock rpc.BlockNumber, rewardPercentiles []float64) (*big.Int, [][]*big.Int, []*big.Int, []float64, error)
 	ChainDb() ethdb.Database

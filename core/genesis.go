@@ -23,6 +23,8 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"reflect"
+	"regexp"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -30,6 +32,7 @@ import (
 	"github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/core/systemcontracts"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
@@ -120,8 +123,8 @@ func (ga *GenesisAlloc) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// hash computes the state root according to the genesis specification.
-func (ga *GenesisAlloc) hash() (common.Hash, error) {
+// deriveHash computes the state root according to the genesis specification.
+func (ga *GenesisAlloc) deriveHash() (common.Hash, error) {
 	// Create an ephemeral in-memory database for computing hash,
 	// all the derived states will be discarded to not pollute disk.
 	db := state.NewDatabase(rawdb.NewMemoryDatabase())
@@ -142,9 +145,9 @@ func (ga *GenesisAlloc) hash() (common.Hash, error) {
 	return statedb.Commit(0, false)
 }
 
-// flush is very similar with hash, but the main difference is all the generated
-// states will be persisted into the given database. Also, the genesis state
-// specification will be flushed as well.
+// flush is very similar with deriveHash, but the main difference is
+// all the generated states will be persisted into the given database.
+// Also, the genesis state specification will be flushed as well.
 func (ga *GenesisAlloc) flush(db ethdb.Database, triedb *trie.Database, blockhash common.Hash) error {
 	statedb, err := state.New(types.EmptyRootHash, state.NewDatabaseWithNodeDB(db, triedb), nil)
 	if err != nil {
@@ -177,6 +180,39 @@ func (ga *GenesisAlloc) flush(db ethdb.Database, triedb *trie.Database, blockhas
 	}
 	rawdb.WriteGenesisStateSpec(db, blockhash, blob)
 	return nil
+}
+
+// CommitGenesisState loads the stored genesis state with the given block
+// hash and commits it into the provided trie database.
+func CommitGenesisState(db ethdb.Database, triedb *trie.Database, blockhash common.Hash) error {
+	var alloc GenesisAlloc
+	blob := rawdb.ReadGenesisStateSpec(db, blockhash)
+	if len(blob) != 0 {
+		if err := alloc.UnmarshalJSON(blob); err != nil {
+			return err
+		}
+	} else {
+		// Genesis allocation is missing and there are several possibilities:
+		// the node is legacy which doesn't persist the genesis allocation or
+		// the persisted allocation is just lost.
+		// - supported networks(mainnet, testnets), recover with defined allocations
+		// - private network, can't recover
+		var genesis *Genesis
+		switch blockhash {
+		case params.MainnetGenesisHash:
+			genesis = DefaultGenesisBlock()
+		case params.GoerliGenesisHash:
+			genesis = DefaultGoerliGenesisBlock()
+		case params.SepoliaGenesisHash:
+			genesis = DefaultSepoliaGenesisBlock()
+		}
+		if genesis != nil {
+			alloc = genesis.Alloc
+		} else {
+			return errors.New("not found")
+		}
+	}
+	return alloc.flush(db, triedb, blockhash)
 }
 
 // GenesisAccount is an account in the state of the genesis block.
@@ -280,6 +316,7 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *trie.Database, gen
 	}
 	// Just commit the new block if there is no stored genesis block.
 	stored := rawdb.ReadCanonicalHash(db, 0)
+	systemcontracts.GenesisHash = stored
 	if (stored == common.Hash{}) {
 		if genesis == nil {
 			log.Info("Writing default main-net genesis block")
@@ -287,11 +324,11 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *trie.Database, gen
 		} else {
 			log.Info("Writing custom genesis block")
 		}
-		applyOverrides(genesis.Config)
 		block, err := genesis.Commit(db, triedb)
 		if err != nil {
 			return genesis.Config, common.Hash{}, err
 		}
+		applyOverrides(genesis.Config)
 		return genesis.Config, block.Hash(), nil
 	}
 	// The genesis block is present(perhaps in ancient database) while the
@@ -303,7 +340,6 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *trie.Database, gen
 		if genesis == nil {
 			genesis = DefaultGenesisBlock()
 		}
-		applyOverrides(genesis.Config)
 		// Ensure the stored genesis matches with the given one.
 		hash := genesis.ToBlock().Hash()
 		if hash != stored {
@@ -313,11 +349,11 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *trie.Database, gen
 		if err != nil {
 			return genesis.Config, hash, err
 		}
+		applyOverrides(genesis.Config)
 		return genesis.Config, block.Hash(), nil
 	}
 	// Check whether the genesis block is already written.
 	if genesis != nil {
-		applyOverrides(genesis.Config)
 		hash := genesis.ToBlock().Hash()
 		if hash != stored {
 			return genesis.Config, hash, &GenesisMismatchError{stored, hash}
@@ -364,7 +400,7 @@ func SetupGenesisBlockWithOverride(db ethdb.Database, triedb *trie.Database, gen
 
 // LoadChainConfig loads the stored chain config if it is already present in
 // database, otherwise, return the config in the provided genesis specification.
-func LoadChainConfig(db ethdb.Database, genesis *Genesis) (*params.ChainConfig, error) {
+func LoadChainConfig(db ethdb.Database, genesis *Genesis) (*params.ChainConfig, common.Hash, error) {
 	// Load the stored chain config from the database. It can be nil
 	// in case the database is empty. Notably, we only care about the
 	// chain config corresponds to the canonical chain.
@@ -372,47 +408,97 @@ func LoadChainConfig(db ethdb.Database, genesis *Genesis) (*params.ChainConfig, 
 	if stored != (common.Hash{}) {
 		storedcfg := rawdb.ReadChainConfig(db, stored)
 		if storedcfg != nil {
-			return storedcfg, nil
+			return storedcfg, stored, nil
 		}
 	}
+
 	// Load the config from the provided genesis specification
 	if genesis != nil {
 		// Reject invalid genesis spec without valid chain config
 		if genesis.Config == nil {
-			return nil, errGenesisNoConfig
+			return nil, common.Hash{}, errGenesisNoConfig
 		}
 		// If the canonical genesis header is present, but the chain
 		// config is missing(initialize the empty leveldb with an
 		// external ancient chain segment), ensure the provided genesis
 		// is matched.
 		if stored != (common.Hash{}) && genesis.ToBlock().Hash() != stored {
-			return nil, &GenesisMismatchError{stored, genesis.ToBlock().Hash()}
+			return nil, common.Hash{}, &GenesisMismatchError{stored, genesis.ToBlock().Hash()}
 		}
-		return genesis.Config, nil
+		return genesis.Config, stored, nil
+
 	}
 	// There is no stored chain config and no new config provided,
 	// In this case the default chain config(mainnet) will be used
-	return params.MainnetChainConfig, nil
+	return params.PolarysChainConfig, params.PolarysGenesisHash, nil
+}
+
+// For any block in g.Config which is nil but the same block in defaultConfig is not
+// set the block in genesis config to the block in defaultConfig.
+// Reflection is used to avoid a long series of if statements with hardcoded block names.
+func (g *Genesis) setDefaultBlockValues(defaultConfig *params.ChainConfig) {
+	// Regex to match block names
+	blockRegex := regexp.MustCompile(`.*Block$`)
+
+	// Get reflect values
+	gConfigElem := reflect.ValueOf(g.Config).Elem()
+	defaultConfigElem := reflect.ValueOf(defaultConfig).Elem()
+
+	// Iterate over fields in config
+	for i := 0; i < gConfigElem.NumField(); i++ {
+		gConfigField := gConfigElem.Field(i)
+		defaultConfigField := defaultConfigElem.Field(i)
+		fieldName := gConfigElem.Type().Field(i).Name
+
+		// Use the regex to check if the field is a Block field
+		if gConfigField.Kind() == reflect.Ptr && blockRegex.MatchString(fieldName) {
+			if gConfigField.IsNil() {
+				gConfigField.Set(defaultConfigField)
+			}
+		}
+	}
 }
 
 func (g *Genesis) configOrDefault(ghash common.Hash) *params.ChainConfig {
+	var defaultConfig *params.ChainConfig
 	switch {
 	case g != nil:
 		return g.Config
 	case ghash == params.MainnetGenesisHash:
 		return params.MainnetChainConfig
-	case ghash == params.SepoliaGenesisHash:
-		return params.SepoliaChainConfig
-	case ghash == params.GoerliGenesisHash:
-		return params.GoerliChainConfig
+	case ghash == params.PolarysGenesisHash:
+		return params.PolarysChainConfig
 	default:
-		return params.AllEthashProtocolChanges
+		if g != nil {
+			// it could be a custom config for QA test, just return
+			return g.Config
+		}
+		defaultConfig = params.AllEthashProtocolChanges
 	}
+	if g == nil || g.Config == nil {
+		return defaultConfig
+	}
+
+	g.setDefaultBlockValues(defaultConfig)
+
+	// BSC Parlia set up
+	if g.Config.Zephyria == nil {
+		g.Config.Zephyria = defaultConfig.Zephyria
+	} else {
+		if g.Config.Zephyria.Period == 0 {
+			g.Config.Zephyria.Period = defaultConfig.Zephyria.Period
+		}
+		if g.Config.Zephyria.Epoch == 0 {
+			g.Config.Zephyria.Epoch = defaultConfig.Zephyria.Epoch
+		}
+	}
+
+	return g.Config
 }
 
 // ToBlock returns the genesis block according to genesis specification.
 func (g *Genesis) ToBlock() *types.Block {
-	root, err := g.Alloc.hash()
+	root, err := g.Alloc.deriveHash()
 	if err != nil {
 		panic(err)
 	}

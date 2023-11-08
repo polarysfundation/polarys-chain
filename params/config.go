@@ -25,10 +25,11 @@ import (
 
 // Genesis hashes to enforce below configs on.
 var (
-	MainnetGenesisHash = common.HexToHash("0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3")
-	HoleskyGenesisHash = common.HexToHash("0xb5f7f912443c940f21fd611f12828d75b534364ed9e95ca4e307729a4661bde4")
-	SepoliaGenesisHash = common.HexToHash("0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9")
-	GoerliGenesisHash  = common.HexToHash("0xbf7e331f7f7c1dd2e05159666b3bf8bc7a8a3a9eb1d518969eab529dd9b88c1a")
+	MainnetGenesisHash    = common.HexToHash("0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3")
+	HoleskyGenesisHash    = common.HexToHash("0xb5f7f912443c940f21fd611f12828d75b534364ed9e95ca4e307729a4661bde4")
+	SepoliaGenesisHash    = common.HexToHash("0x25a5cc106eea7138acab33231d7160d69cb777ee0c2c553fcddf5138993e6dd9")
+	GoerliGenesisHash     = common.HexToHash("0xbf7e331f7f7c1dd2e05159666b3bf8bc7a8a3a9eb1d518969eab529dd9b88c1a")
+	PolarysGenesisHash    = common.HexToHash("0x9f4db548fc42bcd39eebbfc822230817a8940c4931b9815266d8d77c7f371247")
 )
 
 func newUint64(val uint64) *uint64 { return &val }
@@ -132,6 +133,28 @@ var (
 			Epoch:  30000,
 		},
 	}
+
+	//Polarys Config contains the chain parameters to run a node on the Polarys Chain
+	PolarysChainConfig = &ChainConfig{
+		ChainID:             big.NewInt(95668),
+		HomesteadBlock:      big.NewInt(0),
+		EIP150Block:         big.NewInt(0),
+		EIP155Block:         big.NewInt(0),
+		EIP158Block:         big.NewInt(0),
+		ByzantiumBlock:      big.NewInt(0),
+		ConstantinopleBlock: big.NewInt(0),
+		PetersburgBlock:     big.NewInt(0),
+		IstanbulBlock:       big.NewInt(0),
+		MuirGlacierBlock:    big.NewInt(0),
+		MontanasBlock:       big.NewInt(0),
+		BerlinBlock:         big.NewInt(0),
+		LondonBlock:         big.NewInt(0),
+		Zephyria: &ZephyriaConfig{
+			Period: 2,
+			Epoch:  200,
+		},
+	}
+
 	// AllEthashProtocolChanges contains every protocol change (EIPs) introduced
 	// and accepted by the Ethereum core developers into the Ethash consensus.
 	AllEthashProtocolChanges = &ChainConfig{
@@ -214,7 +237,7 @@ var (
 	}
 
 	// TestChainConfig contains every protocol change (EIPs) introduced
-	// and accepted by the Ethereum core developers for testing purposes.
+	// and accepted by the Ethereum core developers for testing proposes.
 	TestChainConfig = &ChainConfig{
 		ChainID:                       big.NewInt(1),
 		HomesteadBlock:                big.NewInt(0),
@@ -328,10 +351,13 @@ type ChainConfig struct {
 	// even without having seen the TTD locally (safer long term).
 	TerminalTotalDifficultyPassed bool `json:"terminalTotalDifficultyPassed,omitempty"`
 
+	MontanasBlock *big.Int `json:"montanasBlock,omitempty"`
+
 	// Various consensus engines
-	Ethash    *EthashConfig `json:"ethash,omitempty"`
-	Clique    *CliqueConfig `json:"clique,omitempty"`
-	IsDevMode bool          `json:"isDev,omitempty"`
+	Ethash    *EthashConfig   `json:"ethash,omitempty"`
+	Clique    *CliqueConfig   `json:"clique,omitempty"`
+	Zephyria  *ZephyriaConfig `json:"zephyria,omitempty"`
+	IsDevMode bool            `json:"isDev,omitempty"`
 }
 
 // EthashConfig is the consensus engine configs for proof-of-work based sealing.
@@ -353,96 +379,54 @@ func (c *CliqueConfig) String() string {
 	return "clique"
 }
 
-// Description returns a human-readable description of ChainConfig.
-func (c *ChainConfig) Description() string {
-	var banner string
+type ZephyriaConfig struct {
+	Period uint64 `json:"period"` // Number of seconds between blocks to enforce
+	Epoch  uint64 `json:"epoch"`  // Epoch length to update validatorSet
+}
 
-	// Create some basic network config output
-	network := NetworkNames[c.ChainID.String()]
-	if network == "" {
-		network = "unknown"
-	}
-	banner += fmt.Sprintf("Chain ID:  %v (%s)\n", c.ChainID, network)
+func (c *ZephyriaConfig) String() string {
+	return "zephyria"
+}
+
+func (c *ChainConfig) Description() string {
+	return ""
+}
+
+// String implements the fmt.Stringer interface.
+func (c *ChainConfig) String() string {
+	var engine interface{}
+
 	switch {
 	case c.Ethash != nil:
-		if c.TerminalTotalDifficulty == nil {
-			banner += "Consensus: Ethash (proof-of-work)\n"
-		} else if !c.TerminalTotalDifficultyPassed {
-			banner += "Consensus: Beacon (proof-of-stake), merging from Ethash (proof-of-work)\n"
-		} else {
-			banner += "Consensus: Beacon (proof-of-stake), merged from Ethash (proof-of-work)\n"
-		}
+		engine = c.Ethash
 	case c.Clique != nil:
-		if c.TerminalTotalDifficulty == nil {
-			banner += "Consensus: Clique (proof-of-authority)\n"
-		} else if !c.TerminalTotalDifficultyPassed {
-			banner += "Consensus: Beacon (proof-of-stake), merging from Clique (proof-of-authority)\n"
-		} else {
-			banner += "Consensus: Beacon (proof-of-stake), merged from Clique (proof-of-authority)\n"
-		}
+		engine = c.Clique
+	case c.Zephyria != nil:
+		engine = c.Zephyria
 	default:
-		banner += "Consensus: unknown\n"
+		engine = "unknown"
 	}
-	banner += "\n"
 
-	// Create a list of forks with a short description of them. Forks that only
-	// makes sense for mainnet should be optional at printing to avoid bloating
-	// the output for testnets and private networks.
-	banner += "Pre-Merge hard forks (block based):\n"
-	banner += fmt.Sprintf(" - Homestead:                   #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/homestead.md)\n", c.HomesteadBlock)
-	if c.DAOForkBlock != nil {
-		banner += fmt.Sprintf(" - DAO Fork:                    #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/dao-fork.md)\n", c.DAOForkBlock)
-	}
-	banner += fmt.Sprintf(" - Tangerine Whistle (EIP 150): #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/tangerine-whistle.md)\n", c.EIP150Block)
-	banner += fmt.Sprintf(" - Spurious Dragon/1 (EIP 155): #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/spurious-dragon.md)\n", c.EIP155Block)
-	banner += fmt.Sprintf(" - Spurious Dragon/2 (EIP 158): #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/spurious-dragon.md)\n", c.EIP155Block)
-	banner += fmt.Sprintf(" - Byzantium:                   #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/byzantium.md)\n", c.ByzantiumBlock)
-	banner += fmt.Sprintf(" - Constantinople:              #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/constantinople.md)\n", c.ConstantinopleBlock)
-	banner += fmt.Sprintf(" - Petersburg:                  #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/petersburg.md)\n", c.PetersburgBlock)
-	banner += fmt.Sprintf(" - Istanbul:                    #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/istanbul.md)\n", c.IstanbulBlock)
-	if c.MuirGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Muir Glacier:                #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/muir-glacier.md)\n", c.MuirGlacierBlock)
-	}
-	banner += fmt.Sprintf(" - Berlin:                      #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/berlin.md)\n", c.BerlinBlock)
-	banner += fmt.Sprintf(" - London:                      #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/london.md)\n", c.LondonBlock)
-	if c.ArrowGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Arrow Glacier:               #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/arrow-glacier.md)\n", c.ArrowGlacierBlock)
-	}
-	if c.GrayGlacierBlock != nil {
-		banner += fmt.Sprintf(" - Gray Glacier:                #%-8v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/gray-glacier.md)\n", c.GrayGlacierBlock)
-	}
-	banner += "\n"
-
-	// Add a special section for the merge as it's non-obvious
-	if c.TerminalTotalDifficulty == nil {
-		banner += "The Merge is not yet available for this network!\n"
-		banner += " - Hard-fork specification: https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/paris.md\n"
-	} else {
-		banner += "Merge configured:\n"
-		banner += " - Hard-fork specification:    https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/paris.md\n"
-		banner += fmt.Sprintf(" - Network known to be merged: %v\n", c.TerminalTotalDifficultyPassed)
-		banner += fmt.Sprintf(" - Total terminal difficulty:  %v\n", c.TerminalTotalDifficulty)
-		if c.MergeNetsplitBlock != nil {
-			banner += fmt.Sprintf(" - Merge netsplit block:       #%-8v\n", c.MergeNetsplitBlock)
-		}
-	}
-	banner += "\n"
-
-	// Create a list of forks post-merge
-	banner += "Post-Merge hard forks (timestamp based):\n"
-	if c.ShanghaiTime != nil {
-		banner += fmt.Sprintf(" - Shanghai:                    @%-10v (https://github.com/ethereum/execution-specs/blob/master/network-upgrades/mainnet-upgrades/shanghai.md)\n", *c.ShanghaiTime)
-	}
-	if c.CancunTime != nil {
-		banner += fmt.Sprintf(" - Cancun:                      @%-10v\n", *c.CancunTime)
-	}
-	if c.PragueTime != nil {
-		banner += fmt.Sprintf(" - Prague:                      @%-10v\n", *c.PragueTime)
-	}
-	if c.VerkleTime != nil {
-		banner += fmt.Sprintf(" - Verkle:                      @%-10v\n", *c.VerkleTime)
-	}
-	return banner
+	return fmt.Sprintf("{ChainID: %v Homestead: %v DAO: %v DAOSupport: %v EIP150: %v EIP155: %v EIP158: %v Byzantium: %v Constantinople: %v Petersburg: %v Istanbul: %v, Muir Glacier: %v, Berlin: %v, London: %v, ArrowGlacier %v, MergeFork %v, Montanas: %v,  Engine: %v}",
+		c.ChainID,
+		c.HomesteadBlock,
+		c.DAOForkBlock,
+		c.DAOForkSupport,
+		c.EIP150Block,
+		c.EIP155Block,
+		c.EIP158Block,
+		c.ByzantiumBlock,
+		c.ConstantinopleBlock,
+		c.PetersburgBlock,
+		c.IstanbulBlock,
+		c.MuirGlacierBlock,
+		c.BerlinBlock,
+		c.LondonBlock,
+		c.ArrowGlacierBlock,
+		c.MergeNetsplitBlock,
+		c.MontanasBlock,
+		engine,
+	)
 }
 
 // IsHomestead returns whether num is either equal to the homestead block or greater.
@@ -505,6 +489,14 @@ func (c *ChainConfig) IsBerlin(num *big.Int) bool {
 // IsLondon returns whether num is either equal to the London fork block or greater.
 func (c *ChainConfig) IsLondon(num *big.Int) bool {
 	return isBlockForked(c.LondonBlock, num)
+}
+
+func (c *ChainConfig) IsMontanas(num *big.Int) bool {
+	return isBlockForked(c.MontanasBlock, num)
+}
+
+func (c *ChainConfig) IsOnMontanas(num *big.Int) bool {
+	return configBlockEqual(c.MontanasBlock, num)
 }
 
 // IsArrowGlacier returns whether num is either equal to the Arrow Glacier (EIP-4345) fork block or greater.
@@ -596,6 +588,7 @@ func (c *ChainConfig) CheckConfigForkOrder() error {
 		{name: "arrowGlacierBlock", block: c.ArrowGlacierBlock, optional: true},
 		{name: "grayGlacierBlock", block: c.GrayGlacierBlock, optional: true},
 		{name: "mergeNetsplitBlock", block: c.MergeNetsplitBlock, optional: true},
+		{name: "montanasBlock", block: c.MontanasBlock},
 		{name: "shanghaiTime", timestamp: c.ShanghaiTime},
 		{name: "cancunTime", timestamp: c.CancunTime, optional: true},
 		{name: "pragueTime", timestamp: c.PragueTime, optional: true},
@@ -693,6 +686,9 @@ func (c *ChainConfig) checkCompatible(newcfg *ChainConfig, headNumber *big.Int, 
 	}
 	if isForkBlockIncompatible(c.MergeNetsplitBlock, newcfg.MergeNetsplitBlock, headNumber) {
 		return newBlockCompatError("Merge netsplit fork block", c.MergeNetsplitBlock, newcfg.MergeNetsplitBlock)
+	}
+	if isForkBlockIncompatible(c.MontanasBlock, newcfg.MontanasBlock, headNumber) {
+		return newBlockCompatError("Montanas fork block", c.MontanasBlock, newcfg.MontanasBlock)
 	}
 	if isForkTimestampIncompatible(c.ShanghaiTime, newcfg.ShanghaiTime, headTimestamp) {
 		return newTimestampCompatError("Shanghai fork timestamp", c.ShanghaiTime, newcfg.ShanghaiTime)
@@ -850,7 +846,9 @@ type Rules struct {
 	IsHomestead, IsEIP150, IsEIP155, IsEIP158               bool
 	IsByzantium, IsConstantinople, IsPetersburg, IsIstanbul bool
 	IsBerlin, IsLondon                                      bool
-	IsMerge, IsShanghai, IsCancun, IsPrague                 bool
+	IsMerge                                                 bool
+	IsMontanas                                              bool
+	IsShanghai, IsCancun, IsPrague                          bool
 	IsVerkle                                                bool
 }
 
@@ -873,6 +871,7 @@ func (c *ChainConfig) Rules(num *big.Int, isMerge bool, timestamp uint64) Rules 
 		IsBerlin:         c.IsBerlin(num),
 		IsLondon:         c.IsLondon(num),
 		IsMerge:          isMerge,
+		IsMontanas:       c.IsMontanas(num),
 		IsShanghai:       c.IsShanghai(num, timestamp),
 		IsCancun:         c.IsCancun(num, timestamp),
 		IsPrague:         c.IsPrague(num, timestamp),

@@ -20,9 +20,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/consensus"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/rawdb"
 	"github.com/ethereum/go-ethereum/core/state"
@@ -145,7 +147,7 @@ func (eth *Ethereum) hashState(ctx context.Context, block *types.Block, reexec u
 		if current = eth.blockchain.GetBlockByNumber(next); current == nil {
 			return nil, nil, fmt.Errorf("block #%d not found", next)
 		}
-		_, _, _, err := eth.blockchain.Processor().Process(current, statedb, vm.Config{})
+		_, _, _, _, err := eth.blockchain.Processor().Process(current, statedb, vm.Config{})
 		if err != nil {
 			return nil, nil, fmt.Errorf("processing block %d failed: %v", current.NumberU64(), err)
 		}
@@ -247,6 +249,14 @@ func (eth *Ethereum) stateAtTransaction(ctx context.Context, block *types.Block,
 		}
 		// Not yet the searched for transaction, execute on top of the current state
 		vmenv := vm.NewEVM(context, txContext, statedb, eth.blockchain.Config(), vm.Config{})
+		if posa, ok := eth.Engine().(consensus.PoSA); ok && msg.From == context.Coinbase &&
+			posa.IsSystemContract(msg.To) && msg.GasPrice.Cmp(big.NewInt(0)) == 0 {
+			balance := statedb.GetBalance(consensus.SystemAddress)
+			if balance.Cmp(common.Big0) > 0 {
+				statedb.SetBalance(consensus.SystemAddress, big.NewInt(0))
+				statedb.AddBalance(context.Coinbase, balance)
+			}
+		}
 		statedb.SetTxContext(tx.Hash(), idx)
 		if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(tx.Gas())); err != nil {
 			return nil, vm.BlockContext{}, nil, nil, fmt.Errorf("transaction %#x failed: %v", tx.Hash(), err)

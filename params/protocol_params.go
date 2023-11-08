@@ -33,6 +33,7 @@ const (
 	SloadGas              uint64 = 50    // Multiplied by the number of 32-byte words that are copied (round up) for any *COPY operation and added.
 	CallValueTransferGas  uint64 = 9000  // Paid for CALL when the value transfer is non-zero.
 	CallNewAccountGas     uint64 = 25000 // Paid for CALL when the destination address didn't exist prior.
+	SystemTxsGas          uint64 = 500000 // The gas reserved for system txs; only for zephyria consensus
 	TxGas                 uint64 = 21000 // Per transaction not creating a contract. NOTE: Not payable on data of calls between transactions.
 	TxGasContractCreation uint64 = 53000 // Per transaction that creates a contract. NOTE: Not payable on data of calls between transactions.
 	TxDataZeroGas         uint64 = 4     // Per byte of data attached to a transaction that equals zero. NOTE: Not payable on data of calls between transactions.
@@ -133,13 +134,14 @@ const (
 
 	// Precompiled contract gas prices
 
-	EcrecoverGas        uint64 = 3000 // Elliptic curve sender recovery gas price
-	Sha256BaseGas       uint64 = 60   // Base price for a SHA256 operation
-	Sha256PerWordGas    uint64 = 12   // Per-word price for a SHA256 operation
-	Ripemd160BaseGas    uint64 = 600  // Base price for a RIPEMD160 operation
-	Ripemd160PerWordGas uint64 = 120  // Per-word price for a RIPEMD160 operation
-	IdentityBaseGas     uint64 = 15   // Base price for a data copy operation
-	IdentityPerWordGas  uint64 = 3    // Per-work price for a data copy operation
+	PLightClientHeaderValidateGas uint64 = 3000
+	EcrecoverGas                  uint64 = 3000 // Elliptic curve sender recovery gas price
+	Sha256BaseGas                 uint64 = 60   // Base price for a SHA256 operation
+	Sha256PerWordGas              uint64 = 12   // Per-word price for a SHA256 operation
+	Ripemd160BaseGas              uint64 = 600  // Base price for a RIPEMD160 operation
+	Ripemd160PerWordGas           uint64 = 120  // Per-word price for a RIPEMD160 operation
+	IdentityBaseGas               uint64 = 15   // Base price for a data copy operation
+	IdentityPerWordGas            uint64 = 3    // Per-work price for a data copy operation
 
 	Bn256AddGasByzantium             uint64 = 500    // Byzantium gas needed for an elliptic curve addition
 	Bn256AddGasIstanbul              uint64 = 150    // Gas needed for an elliptic curve addition

@@ -46,12 +46,12 @@ func TestCollector(t *testing.T) {
 	}
 	if have := c.buff.String(); have != want {
 		t.Logf("have\n%v", have)
-		t.Logf("have vs want:\n%v", findFirstDiffPos(have, want))
+		t.Logf("have vs want:\n%v", findFirstDiffpos(have, want))
 		t.Fatalf("unexpected collector output")
 	}
 }
 
-func findFirstDiffPos(a, b string) string {
+func findFirstDiffpos(a, b string) string {
 	yy := strings.Split(b, "\n")
 	for i, x := range strings.Split(a, "\n") {
 		if i >= len(yy) {

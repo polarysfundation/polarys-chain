@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"runtime"
 	"sync"
@@ -534,6 +535,17 @@ func (api *API) IntermediateRoots(ctx context.Context, hash common.Hash, config 
 			txContext = core.NewEVMTxContext(msg)
 			vmenv     = vm.NewEVM(vmctx, txContext, statedb, chainConfig, vm.Config{})
 		)
+
+		if posa, ok := api.backend.Engine().(consensus.PoSA); ok {
+			if isSystem, _ := posa.IsSystemTransaction(tx, block.Header()); isSystem {
+				balance := statedb.GetBalance(consensus.SystemAddress)
+				if balance.Cmp(common.Big0) > 0 {
+					statedb.SetBalance(consensus.SystemAddress, big.NewInt(0))
+					statedb.AddBalance(vmctx.Coinbase, balance)
+				}
+			}
+		}
+
 		statedb.SetTxContext(tx.Hash(), i)
 		if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.GasLimit)); err != nil {
 			log.Warn("Tracing intermediate roots did not complete", "txindex", i, "txhash", tx.Hash(), "err", err)
@@ -679,6 +691,15 @@ txloop:
 
 		// Generate the next state snapshot fast without tracing
 		msg, _ := core.TransactionToMessage(tx, signer, block.BaseFee())
+		if posa, ok := api.backend.Engine().(consensus.PoSA); ok {
+			if isSystem, _ := posa.IsSystemTransaction(tx, block.Header()); isSystem {
+				balance := statedb.GetBalance(consensus.SystemAddress)
+				if balance.Cmp(common.Big0) > 0 {
+					statedb.SetBalance(consensus.SystemAddress, big.NewInt(0))
+					statedb.AddBalance(block.Header().Coinbase, balance)
+				}
+			}
+		}
 		statedb.SetTxContext(tx.Hash(), i)
 		vmenv := vm.NewEVM(blockCtx, core.NewEVMTxContext(msg), statedb, api.backend.ChainConfig(), vm.Config{})
 		if _, err := core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.GasLimit)); err != nil {
@@ -787,6 +808,15 @@ func (api *API) standardTraceBlockToFile(ctx context.Context, block *types.Block
 		}
 		// Execute the transaction and flush any traces to disk
 		vmenv := vm.NewEVM(vmctx, txContext, statedb, chainConfig, vmConf)
+		if posa, ok := api.backend.Engine().(consensus.PoSA); ok {
+			if isSystem, _ := posa.IsSystemTransaction(tx, block.Header()); isSystem {
+				balance := statedb.GetBalance(consensus.SystemAddress)
+				if balance.Cmp(common.Big0) > 0 {
+					statedb.SetBalance(consensus.SystemAddress, big.NewInt(0))
+					statedb.AddBalance(vmctx.Coinbase, balance)
+				}
+			}
+		}
 		statedb.SetTxContext(tx.Hash(), i)
 		_, err = core.ApplyMessage(vmenv, msg, new(core.GasPool).AddGas(msg.GasLimit))
 		if writer != nil {
